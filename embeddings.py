@@ -8,7 +8,7 @@
 import chromadb
 from chromadb.config import Settings
 from openai import OpenAI
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import os
 
 
@@ -180,7 +180,12 @@ class EmbeddingStore:
         
         print(f"✓ Добавлено {len(all_chunks)} чанков. Всего в базе: {self.collection.count()}")
     
-    def search(self, query: str, top_k: int = 3) -> List[Tuple[str, str, float]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        source: Optional[str] = None,
+    ) -> List[Tuple[str, str, float]]:
         """
         Выполняет семантический поиск по векторному хранилищу.
         
@@ -189,6 +194,7 @@ class EmbeddingStore:
         Args:
             query: Поисковый запрос пользователя
             top_k: Количество результатов для возврата
+            source: Если задано, только чанки с metadata source, равным этой строке
             
         Returns:
             Список кортежей (текст_чанка, источник, расстояние)
@@ -203,11 +209,15 @@ class EmbeddingStore:
         query_embeddings = self._create_embeddings([query])
         query_embedding = query_embeddings[0]
         
+        query_kwargs = {
+            "query_embeddings": [query_embedding],
+            "n_results": min(top_k, self.collection.count()),
+        }
+        if source is not None:
+            query_kwargs["where"] = {"source": source}
+        
         # Выполняем поиск в ChromaDB
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(top_k, self.collection.count())
-        )
+        results = self.collection.query(**query_kwargs)
         
         # Форматируем результаты
         formatted_results = []

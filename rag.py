@@ -103,7 +103,8 @@ class RAGAssistant:
         self, 
         query: str, 
         top_k: int = 3,
-        verbose: bool = True
+        verbose: bool = True,
+        source_filter: Optional[str] = None,
     ) -> Tuple[str, List[Tuple[str, str, float]]]:
         """
         Генерирует ответ на запрос пользователя используя RAG.
@@ -118,15 +119,19 @@ class RAGAssistant:
             query: Запрос пользователя
             top_k: Количество документов для поиска
             verbose: Выводить ли детальную информацию о процессе
+            source_filter: Ограничить поиск чанками с metadata source равным этой строке
             
         Returns:
             Кортеж (ответ_llm, список_найденных_документов)
         """
         # Шаг 1: Поиск релевантных документов в векторной базе
         if verbose:
-            print(f"\n🔍 Поиск релевантных документов (top_k={top_k})...")
+            filter_hint = f", источник={source_filter!r}" if source_filter else ""
+            print(f"\n🔍 Поиск релевантных документов (top_k={top_k}{filter_hint})...")
         
-        search_results = self.embedding_store.search(query, top_k=top_k)
+        search_results = self.embedding_store.search(
+            query, top_k=top_k, source=source_filter
+        )
         
         if verbose and search_results:
             print(f"\n📚 Найдено {len(search_results)} релевантных фрагментов:")
@@ -171,16 +176,21 @@ class RAGAssistant:
             print(f"❌ {error_message}")
             return error_message, search_results
     
-    def simple_response(self, query: str) -> str:
+    def simple_response(
+        self, query: str, source_filter: Optional[str] = None
+    ) -> str:
         """
         Упрощенная версия generate_response, возвращающая только текст ответа.
         
         Args:
             query: Запрос пользователя
+            source_filter: Опциональный фильтр по metadata source
             
         Returns:
             Ответ LLM
         """
-        answer, _ = self.generate_response(query, verbose=False)
+        answer, _ = self.generate_response(
+            query, verbose=False, source_filter=source_filter
+        )
         return answer
 

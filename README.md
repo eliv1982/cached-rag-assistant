@@ -1,6 +1,10 @@
 # 🤖 RAG-ассистент с ChromaDB и кешированием
 
-Минимальный, но полностью рабочий пример ИИ-ассистента с технологией RAG (Retrieval-Augmented Generation), локальным векторным хранилищем ChromaDB и кешированием ответов.
+**cached-rag-assistant** — минимальный, но полностью рабочий пример ИИ-ассистента с технологией RAG (Retrieval-Augmented Generation), локальным векторным хранилищем ChromaDB и кешированием ответов.
+
+**Репозиторий:** [github.com/eliv1982/cached-rag-assistant](https://github.com/eliv1982/cached-rag-assistant)
+
+*English summary:* Python RAG assistant with response caching, ChromaDB vector search, OpenAI embeddings/LLM, and optional metadata `source` filter via `RAG_SOURCE_FILTER` in `.env`.
 
 ## 📋 Описание
 
@@ -23,13 +27,15 @@
 - ✅ **Простая архитектура** с понятным кодом
 - ✅ **Подробные комментарии** для обучения
 - ✅ **Два режима работы**: интерактивный и демонстрационный
+- ✅ **Фильтр по источнику** (метаданные Chroma): переменная `RAG_SOURCE_FILTER` в `.env` — поиск только среди чанков с заданным `source`
 
 ## 📦 Установка
 
 ### 1. Клонирование и переход в директорию
 
 ```bash
-cd your-project-directory
+git clone https://github.com/eliv1982/cached-rag-assistant.git
+cd cached-rag-assistant
 ```
 
 ### 2. Создание виртуального окружения (рекомендуется)
@@ -50,15 +56,33 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Настройка API ключа OpenAI
+### 4. Настройка окружения (`.env`)
 
-Создайте файл `.env` в корне проекта и добавьте ваш API ключ:
+Скопируйте пример и подставьте ключ:
+
+```bash
+# Windows (cmd/PowerShell)
+copy env.example .env
+
+# Linux / macOS
+cp env.example .env
+```
+
+Минимально в `.env`:
 
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-Получить API ключ можно на [platform.openai.com](https://platform.openai.com/api-keys)
+**Опционально** — поиск только по документам с указанным именем источника (должно совпадать с первым элементом кортежа в `get_sample_documents()`, например `Python Основы`):
+
+```env
+# RAG_SOURCE_FILTER=Python Основы
+```
+
+Закомментируйте или удалите строку, чтобы искать по всей коллекции. Подробнее см. `env.example`.
+
+Получить API ключ: [platform.openai.com](https://platform.openai.com/api-keys)
 
 ## 🚀 Запуск
 
@@ -94,7 +118,8 @@ python main.py
 ├── embeddings.py     # Работа с векторным хранилищем ChromaDB
 ├── requirements.txt  # Зависимости проекта
 ├── README.md         # Документация (этот файл)
-├── .env              # Конфигурация (создается вручную)
+├── env.example       # Пример переменных окружения
+├── .env              # Конфигурация (создается вручную, не коммитится)
 ├── cache.json        # Файл кеша (создается автоматически)
 └── chroma_db/        # База данных ChromaDB (создается автоматически)
 ```
@@ -130,8 +155,8 @@ store = EmbeddingStore()
 # Добавление документов
 store.add_documents(documents)
 
-# Поиск релевантных фрагментов
-results = store.search(query, top_k=3)
+# Поиск релевантных фрагментов (опционально: только metadata source)
+results = store.search(query, top_k=5, source="Python Основы")  # source=None — вся коллекция
 ```
 
 **Используемые технологии:**
@@ -146,8 +171,8 @@ results = store.search(query, top_k=3)
 ```python
 assistant = RAGAssistant(embedding_store)
 
-# Генерация ответа с RAG
-answer, sources = assistant.generate_response(query)
+# Генерация ответа с RAG (source_filter=None — без фильтра по источнику)
+answer, sources = assistant.generate_response(query, top_k=5, source_filter=None)
 ```
 
 **Процесс RAG:**
@@ -214,8 +239,11 @@ rag_assistant = RAGAssistant(
 ### Изменение параметров поиска
 
 ```python
-# Количество документов для контекста
-answer = assistant.generate_response(query, top_k=5)
+# Количество фрагментов для контекста (в main.py — аргумент generate_response)
+answer, _ = assistant.generate_response(query, top_k=5)
+
+# Или фильтр по источнику в коде (в приложении также читается RAG_SOURCE_FILTER из .env)
+answer, _ = assistant.generate_response(query, top_k=5, source_filter="Python Основы")
 
 # Размер чанков
 store = EmbeddingStore()

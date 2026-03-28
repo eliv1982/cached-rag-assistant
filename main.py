@@ -9,10 +9,21 @@
 """
 
 import os
+from typing import Optional
+
 from dotenv import load_dotenv
 from embeddings import EmbeddingStore, get_sample_documents
 from rag import RAGAssistant
 from cache import ResponseCache
+
+
+def source_filter_from_env() -> Optional[str]:
+    """Читает RAG_SOURCE_FILTER из окружения (точное совпадение с metadata source)."""
+    raw = os.getenv("RAG_SOURCE_FILTER")
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped if stripped else None
 
 
 def initialize_system():
@@ -73,7 +84,12 @@ def initialize_system():
     return embedding_store, rag_assistant, cache
 
 
-def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCache) -> str:
+def answer_question(
+    query: str,
+    rag_assistant: RAGAssistant,
+    cache: ResponseCache,
+    source_filter: Optional[str] = None,
+) -> str:
     """
     Отвечает на вопрос пользователя с использованием кеша и RAG.
     
@@ -87,6 +103,7 @@ def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCach
         query: Вопрос пользователя
         rag_assistant: Экземпляр RAG-ассистента
         cache: Экземпляр кеша
+        source_filter: Опционально — только чанки с metadata source равным строке
         
     Returns:
         Ответ на вопрос
@@ -114,7 +131,8 @@ def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCach
         answer, search_results = rag_assistant.generate_response(
             query=query,
             top_k=3,
-            verbose=True
+            verbose=True,
+            source_filter=source_filter,
         )
         
         # Шаг 3: Сохраняем ответ в кеш
@@ -135,7 +153,11 @@ def answer_question(query: str, rag_assistant: RAGAssistant, cache: ResponseCach
         return error_msg
 
 
-def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
+def interactive_mode(
+    rag_assistant: RAGAssistant,
+    cache: ResponseCache,
+    source_filter: Optional[str] = None,
+):
     """
     Интерактивный режим общения с ассистентом.
     
@@ -147,6 +169,8 @@ def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
     print("=" * 70)
     print("\nВы можете задавать вопросы ассистенту.")
     print("Для выхода введите: exit, quit, выход или q")
+    if source_filter:
+        print(f"\n🔎 Активен фильтр по источнику (metadata): {source_filter!r}")
     print("\nДоступные команды:")
     print("  • cache - показать информацию о кеше")
     print("  • clear_cache - очистить кеш")
@@ -181,7 +205,9 @@ def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
                 continue
             
             # Обрабатываем вопрос пользователя
-            answer_question(user_input, rag_assistant, cache)
+            answer_question(
+                user_input, rag_assistant, cache, source_filter=source_filter
+            )
             
         except KeyboardInterrupt:
             print("\n\n👋 Прервано пользователем. До свидания!")
@@ -190,7 +216,11 @@ def interactive_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
             print(f"\n❌ Ошибка: {str(e)}")
 
 
-def demo_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
+def demo_mode(
+    rag_assistant: RAGAssistant,
+    cache: ResponseCache,
+    source_filter: Optional[str] = None,
+):
     """
     Демонстрационный режим с заранее заготовленными вопросами.
     
@@ -215,7 +245,9 @@ def demo_mode(rag_assistant: RAGAssistant, cache: ResponseCache):
         print(f"ВОПРОС {i} из {len(demo_questions)}")
         print(f"{'#' * 70}")
         
-        answer_question(question, rag_assistant, cache)
+        answer_question(
+            question, rag_assistant, cache, source_filter=source_filter
+        )
         
         # Пауза между вопросами (кроме последнего)
         if i < len(demo_questions):
@@ -233,6 +265,7 @@ def main():
     try:
         # Инициализируем систему
         embedding_store, rag_assistant, cache = initialize_system()
+        source_filter = source_filter_from_env()
         
         # Выбор режима работы
         print("\n" + "=" * 70)
@@ -245,15 +278,15 @@ def main():
         mode = input("Выберите режим (1 или 2, по умолчанию 1): ").strip()
         
         if mode == '2':
-            demo_mode(rag_assistant, cache)
+            demo_mode(rag_assistant, cache, source_filter=source_filter)
             
             # Предложить перейти в интерактивный режим
             print("\n" + "=" * 70)
             continue_interactive = input("\nПерейти в интерактивный режим? (y/n): ").strip().lower()
             if continue_interactive in ['y', 'yes', 'д', 'да', '']:
-                interactive_mode(rag_assistant, cache)
+                interactive_mode(rag_assistant, cache, source_filter=source_filter)
         else:
-            interactive_mode(rag_assistant, cache)
+            interactive_mode(rag_assistant, cache, source_filter=source_filter)
         
     except Exception as e:
         print(f"\n❌ Критическая ошибка: {str(e)}")
