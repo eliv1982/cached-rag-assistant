@@ -55,11 +55,13 @@ class EmbeddingStore:
         print(f"Модель эмбеддингов: {embedding_model} (OpenAI API)")
         
         # Получаем или создаем коллекцию в ChromaDB
+        # Метрика не задана, поэтому Chroma использует L2 по умолчанию (не cosine).
+        # У нормированных эмбеддингов OpenAI порядок результатов L2 и cosine совпадает.
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"description": "Документы для RAG-ассистента"}
         )
-        
+
         print(f"✓ ChromaDB инициализирована. Документов в коллекции: {self.collection.count()}")
     
     def _create_chunks(self, text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
@@ -74,23 +76,38 @@ class EmbeddingStore:
             overlap: Размер перекрытия между чанками
             
         Returns:
-            Список чанков текста
+            Список чанков текста (для пустого или состоящего из пробелов текста — [])
+
+        Raises:
+            ValueError: если chunk_size <= 0, overlap < 0 или overlap >= chunk_size
+                (при overlap >= chunk_size окно не сдвигалось бы вперёд — бесконечный цикл)
         """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size должен быть больше 0")
+        if overlap < 0:
+            raise ValueError("overlap не может быть отрицательным")
+        if overlap >= chunk_size:
+            raise ValueError("overlap должен быть меньше chunk_size")
+
         chunks = []
         start = 0
-        
+
         while start < len(text):
             # Вычисляем конец текущего чанка
             end = start + chunk_size
-            
+
             # Добавляем чанк в список
             chunk = text[start:end].strip()
             if chunk:  # Пропускаем пустые чанки
                 chunks.append(chunk)
-            
+
+            # Текст закончился — следующий чанк был бы лишь дублем хвоста этого
+            if end >= len(text):
+                break
+
             # Сдвигаемся вперед с учетом перекрытия
             start = end - overlap
-        
+
         return chunks
     
     def _create_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -118,7 +135,8 @@ class EmbeddingStore:
             return embeddings
             
         except Exception as e:
-            print(f"❌ Ошибка при создании эмбеддингов: {str(e)}")
+            # Текст исключения не печатаем: в ошибках API может быть фрагмент ключа
+            print(f"❌ Ошибка при создании эмбеддингов ({type(e).__name__})")
             raise
     
     def add_documents(self, documents: List[Tuple[str, str]]) -> None:
@@ -198,8 +216,17 @@ class EmbeddingStore:
             
         Returns:
             Список кортежей (текст_чанка, источник, расстояние)
-            Расстояние: чем меньше, тем более релевантен результат
+            Расстояние: чем меньше, тем более релевантен результат.
+            Метрика коллекции — L2 (значение по умолчанию в Chroma), это не сходство.
+
+        Raises:
+            ValueError: если запрос пустой или top_k <= 0
         """
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query должен быть непустой строкой")
+        if top_k <= 0:
+            raise ValueError("top_k должен быть больше 0")
+
         # Проверяем, есть ли документы в коллекции
         if self.collection.count() == 0:
             print("⚠ Предупреждение: коллекция пуста, нет документов для поиска")

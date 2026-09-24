@@ -1,0 +1,5 @@
+# Зависимости для запуска тестов (pip install -r requirements-dev.txt)
+-r requirements.txt
+
+# Тесты работают офлайн: OpenAI и ChromaDB в них заменены заглушками
+pytest>=8.0

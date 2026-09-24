@@ -9,12 +9,17 @@
 """
 
 import os
+import sys
 from typing import Optional
 
 from dotenv import load_dotenv
 from embeddings import EmbeddingStore, get_sample_documents
 from rag import RAGAssistant
 from cache import ResponseCache
+
+
+class ConfigError(RuntimeError):
+    """Ошибка конфигурации (например, не задан OPENAI_API_KEY)."""
 
 
 def source_filter_from_env() -> Optional[str]:
@@ -26,28 +31,44 @@ def source_filter_from_env() -> Optional[str]:
     return stripped if stripped else None
 
 
+def describe_error(e: Exception) -> str:
+    """
+    Безопасное описание исключения: только тип и HTTP-статус, если он есть.
+
+    Текст исключения не включаем — в ошибках API бывает фрагмент ключа,
+    а также детали запроса и ответа.
+    """
+    status = getattr(e, "status_code", None)
+    return type(e).__name__ + (f", HTTP {status}" if status else "")
+
+
 def initialize_system():
     """
     Инициализирует все компоненты RAG-системы.
     
     Returns:
         Кортеж (embedding_store, rag_assistant, cache)
+
+    Raises:
+        ConfigError: если не задан OPENAI_API_KEY (до создания клиентов и хранилищ)
     """
     print("=" * 70)
     print("🚀 ИНИЦИАЛИЗАЦИЯ RAG-АССИСТЕНТА")
     print("=" * 70)
-    
+
     # Загружаем переменные окружения из .env файла
     load_dotenv()
-    
-    # Проверяем наличие API ключа OpenAI
-    api_key = os.getenv("OPENAI_API_KEY")
+
+    # Без ключа работать нечего (и эмбеддинги, и ответы идут через OpenAI),
+    # поэтому падаем сразу, до создания кеша, ChromaDB и клиентов OpenAI.
+    # Само значение ключа нигде не выводится.
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
-        print("⚠️  ВНИМАНИЕ: Не найден OPENAI_API_KEY в переменных окружения!")
-        print("   Создайте файл .env и добавьте туда: OPENAI_API_KEY=your_key_here")
-        print("   Или установите переменную окружения в системе.")
-        print()
-    
+        raise ConfigError(
+            "Не задан OPENAI_API_KEY. Скопируйте env.example в .env и укажите ключ "
+            "(OPENAI_API_KEY=...) либо задайте переменную окружения."
+        )
+
     # 1. Инициализируем кеш для хранения ответов
     print("\n[1/3] Инициализация кеша...")
     cache = ResponseCache(cache_file="cache.json")
@@ -73,7 +94,8 @@ def initialize_system():
     print("\n[3/3] Инициализация RAG-ассистента...")
     rag_assistant = RAGAssistant(
         embedding_store=embedding_store,
-        model="gpt-3.5-turbo",
+        api_key=api_key,
+        model="gpt-4o-mini",
         temperature=0.7
     )
     
@@ -96,27 +118,33 @@ def answer_question(
     Логика работы:
     1. Проверяем кеш - если ответ есть, возвращаем его
     2. Если ответа нет, выполняем RAG (поиск + генерация)
-    3. Сохраняем новый ответ в кеш
+    3. Сохраняем новый ответ в кеш (только успешный ответ на основе найденного контекста)
     4. Возвращаем ответ
-    
+
+    Ключ кеша включает вопрос, фильтр по источнику и модель LLM: один и тот же
+    вопрос с другим фильтром или моделью не получит чужой закешированный ответ.
+
     Args:
         query: Вопрос пользователя
         rag_assistant: Экземпляр RAG-ассистента
         cache: Экземпляр кеша
         source_filter: Опционально — только чанки с metadata source равным строке
-        
+
     Returns:
-        Ответ на вопрос
+        Ответ на вопрос (или текст ошибки, если запрос не удался; ошибки не кешируются)
     """
     print("\n" + "=" * 70)
     print(f"❓ ВОПРОС: {query}")
     print("=" * 70)
-    
+
+    # Всё, от чего зависит ответ, кроме самого текста вопроса
+    cache_context = {"source_filter": source_filter, "model": rag_assistant.model}
+
     # Шаг 1: Проверяем кеш
     print("\n[Шаг 1] Проверка кеша...")
-    cached_answer = cache.get(query)
-    
-    if cached_answer:
+    cached_answer = cache.get(query, cache_context)
+
+    if cached_answer is not None:
         # Ответ найден в кеше - возвращаем его
         print("\n💾 Ответ из кеша:")
         print("-" * 70)
@@ -134,23 +162,30 @@ def answer_question(
             verbose=True,
             source_filter=source_filter,
         )
-        
-        # Шаг 3: Сохраняем ответ в кеш
-        print("\n[Шаг 3] Сохранение ответа в кеш...")
-        cache.set(query, answer)
-        
-        # Выводим финальный ответ
-        print("\n💡 ОТВЕТ:")
-        print("-" * 70)
-        print(answer)
-        print("-" * 70)
-        
-        return answer
-        
     except Exception as e:
-        error_msg = f"Ошибка при обработке запроса: {str(e)}"
+        # Ошибку не кешируем: cache.set ниже выполняется только после успешной
+        # генерации. Текст исключения не печатаем — в ответах API бывает
+        # фрагмент ключа; достаточно типа ошибки и HTTP-статуса, если он есть.
+        error_msg = f"Ошибка при обработке запроса ({describe_error(e)}). Ответ не сохранён в кеш."
         print(f"\n❌ {error_msg}")
         return error_msg
+
+    # Шаг 3: Сохраняем ответ в кеш
+    if search_results:
+        print("\n[Шаг 3] Сохранение ответа в кеш...")
+        cache.set(query, answer, cache_context)
+    else:
+        # Контекст не найден: LLM не вызывалась, а сообщение "ничего не найдено"
+        # после пополнения базы знаний быстро устарело бы — не кешируем
+        print("\n[Шаг 3] Контекст не найден — ответ не кешируется.")
+
+    # Выводим финальный ответ
+    print("\n💡 ОТВЕТ:")
+    print("-" * 70)
+    print(answer)
+    print("-" * 70)
+
+    return answer
 
 
 def interactive_mode(
@@ -213,7 +248,8 @@ def interactive_mode(
             print("\n\n👋 Прервано пользователем. До свидания!")
             break
         except Exception as e:
-            print(f"\n❌ Ошибка: {str(e)}")
+            # Текст исключения не печатаем — см. describe_error()
+            print(f"\n❌ Ошибка ({describe_error(e)}).")
 
 
 def demo_mode(
@@ -288,10 +324,13 @@ def main():
         else:
             interactive_mode(rag_assistant, cache, source_filter=source_filter)
         
+    except ConfigError as e:
+        print(f"\n❌ {e}")
+        sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Критическая ошибка: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        # Ни текст исключения, ни traceback не печатаем: в них бывает фрагмент
+        # ключа API и детали запроса/ответа. Только тип ошибки и HTTP-статус.
+        print(f"\n❌ Критическая ошибка ({describe_error(e)}).")
 
 
 if __name__ == "__main__":
